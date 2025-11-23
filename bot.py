@@ -26,13 +26,30 @@ PAYMENT_INFO = os.getenv(
 )
 
 if not BOT_TOKEN:
-    raise RuntimeError("Не указан BOT_TOKEN в .env")
+    raise RuntimeError("Не указан BOT_TOKEN в .env или переменных окружения")
 
 # ==========================
 #   TELEGRAM BOT
 # ==========================
 bot = Bot(token=BOT_TOKEN, parse_mode=types.ParseMode.HTML)
 dp = Dispatcher(bot)
+
+# ==========================
+#   НАСТРОЙКИ WEBHOOK ДЛЯ RENDER
+# ==========================
+# Render автоматически подставляет внешний URL в переменную RENDER_EXTERNAL_URL
+WEBHOOK_HOST = os.getenv("RENDER_EXTERNAL_URL")
+
+# На локалке можно указать любой тестовый URL, но для Render достаточно ENV
+if not WEBHOOK_HOST:
+    WEBHOOK_HOST = "https://example.com"
+
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+WEBHOOK_URL = WEBHOOK_HOST + WEBHOOK_PATH
+
+# Хост и порт для web-сервера внутри контейнера Render
+WEBAPP_HOST = "0.0.0.0"
+WEBAPP_PORT = int(os.getenv("PORT", 5000))
 
 # ==========================
 #   БАЗА ДАННЫХ
@@ -109,7 +126,6 @@ STATUS_NAMES = {
 # ==========================
 #   ПРОСТОЙ STATE-МАШИНГ
 # ==========================
-# Храним временные состояния пользователей в памяти (для создания новой сделки)
 user_states = {}  # {tg_id: "state_name"}
 user_temp = {}    # {tg_id: {"seller_id": ..., "amount": ..., "description": ...}}
 
@@ -1048,8 +1064,32 @@ async def cmd_cancel(message: types.Message):
 
 
 # ==========================
-#   ЗАПУСК БОТА
+#   ФУНКЦИИ ЗАПУСКА/ОСТАНОВКИ WEBHOOK
+# ==========================
+async def on_startup(dp: Dispatcher):
+    # Сбрасываем старый вебхук и ставим новый
+    await bot.delete_webhook()
+    await bot.set_webhook(WEBHOOK_URL)
+    logger.info(f"✅ Webhook установлен: {WEBHOOK_URL}")
+
+
+async def on_shutdown(dp: Dispatcher):
+    await bot.delete_webhook()
+    await bot.session.close()
+    logger.info("🛑 Бот остановлен")
+
+
+# ==========================
+#   ЗАПУСК БОТА (WEBHOOK)
 # ==========================
 if __name__ == "__main__":
-    logger.info("Бот-гарант запущен.")
-    executor.start_polling(dp, skip_updates=True)
+    logger.info("Бот-гарант запускается в режиме webhook.")
+    executor.start_webhook(
+        dispatcher=dp,
+        webhook_path=WEBHOOK_PATH,
+        on_startup=on_startup,
+        on_shutdown=on_shutdown,
+        skip_updates=True,
+        host=WEBAPP_HOST,
+        port=WEBAPP_PORT,
+    )
